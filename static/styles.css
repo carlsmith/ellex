@@ -1,0 +1,13 @@
+body {
+    margin: 0;
+    color: #FFD178;
+    background: #333;
+}
+
+output {
+    width: 847px;
+    padding: 8px;
+    display: block;
+    font-size: 30px;
+    font-family: "Courier New";
+}

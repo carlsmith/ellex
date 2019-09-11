@@ -1,26 +1,34 @@
 /* TOKENIZER
-This file implements and exports the tokenizer. The pipeline is documented in
-`/static/codegen.js`.
+This file implements and exports the tokenizer, the initial stage of the
+assembly process. This stage is fairly simple, turning source code into
+simple lexemes.
+*/
 
-Tokens are simple hashes with the usual `type` and `value` properties (both
-strings), and `line` and `column` numbers to note their positions. */
+import { radixes, constants, instructions } from "/static/data.js";
 
-const [empty, space, pound, bang, newline] = ["", " ", "#", "!", "\n"];
-const [opener, closer, comma, colon, equals] = ["[", "]", ",", ":", "="];
+const [opener, closer, colon, equals] = ["[", "]", ":", "="];
+const [comma, space, newline] = ["," ," ", "\n"];
+const [dollar, pound, bang] = ["$", "#", "!"];
 
 const decimals = "0123456789";
 const hexidecimals = decimals + "ABCDEF";
 const uppers = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
 const lowers = uppers.toLowerCase();
 const letters = uppers + lowers;
 const capitals = uppers + decimals;
+const initials = capitals + dollar;
 
 const whitespace = [space, newline];
 const insignificants = [space, newline, pound];
-const instructions = ["TMA", "AOA", "TMX", "TAM", "TXA"];
-const declarators = ["bin", "oct", "dec", "hex"];
 
-const iife = lambda => lambda();
+// DEFINE THE EXPORTS...
+
+export const empty = "";
+
+export const put = console.log;
+
+export const iife = lambda => lambda();
 
 export const tokenize = function * (source) {
 
@@ -74,9 +82,9 @@ export const tokenize = function * (source) {
         and uses it to reduce a string of digits to a bool that indicates
         whether the digits form valid hexidecimal number. */
 
-        const digital = (x, y) => hexidecimals.includes(x) && y;
+        const digital = digit => hexidecimals.includes(digit);
 
-        return address => Array.from(address).reduce(digital);
+        return address => address.split(empty).every(digital);
     });
 
     let [character, value, type] = [empty, empty, empty];
@@ -84,7 +92,7 @@ export const tokenize = function * (source) {
 
     while (advance()) {
 
-        // check for conditions that do not yield a token...
+        // CHECK FOR CONDITIONS THAT DO NOT YIELD A TOKEN...
 
         if (insignificants.includes(character)) {
 
@@ -95,7 +103,7 @@ export const tokenize = function * (source) {
             continue;
         }
 
-        // check for conditions that yield a single-character token...
+        // CHECK FOR CONDITIONS THAT YIELD A SINGLE-CHARACTER TOKEN...
 
         [line, column, value] = [lines + 1, index - lineStart, empty];
 
@@ -111,27 +119,33 @@ export const tokenize = function * (source) {
 
         else if (character === equals) [type, value] = ["let", character];
 
-        // check for conditions that yield a multi-character token...
+        // CHECK FOR CONDITIONS THAT YIELD A MULTI-CHARACTER TOKEN...
 
         else if (lowers.includes(character)) {
 
+            type = "variable";
+
             gatherWhile($ => letters.includes(nextCharacter()));
 
-            if (declarators.includes(value)) type = "declarator";
-            else type = "variable";
-
-        } else if (capitals.includes(character)) {
+        } else if (initials.includes(character)) {
 
             gatherWhile($ =>  capitals.includes(nextCharacter()));
 
             if (value === "X" || value === "Y") type = "index";
-            else if (instructions.includes(value)) type = "code";
+
+            else if (value in instructions) type = "opcode";
+
+            else if (value in radixes) type = "declarator";
+
+            else if (value in constants) type = "constant";
+
             else if (numerical(value)) type = "number";
+
             else chuck(`invalid token (${value})`);
 
         } else chuck(`unexpected character (${character})`);
 
-        // yield the actual token...
+        // YIELD THE ACTUAL TOKEN...
 
         yield {type, value, line, column};
     }

@@ -1,29 +1,13 @@
 /* ASSEMBLER
-This file implements and exports the assembler. The pipeline is documented in
-`/static/codegen.js`.
-
-Instructions are simple hashes with four properties:
-
-+ `code`: the code name of the instruction (as a string)
-+ `mode`: the instruction's addressing mode (as a string)
-+ `value`: the numerical address (or `null` if `mode` is implicit`
-+ `bytes`: the length in bytes (always `1`, `2` or `3`)
-
-The are nine valid modes: `implicit`, `immediate`, `indexedX`, `indexedY`
-`indirect`, `indexedYindirect`, `indexedXindirect`, `indirectindexedX` and
-`indirectindexedY`.
-
-Instructions with implicit addressing take up one byte in memory, while those
-with immediate addressing take two. Instructions using any other addressing
-mode fill three bytes.
+This file implements and exports the assembler, which is the second of the
+three stage assembly process. This stage does the most work, handling the
+actual grammar of the language.
 */
 
-const empty = "";
-const put = console.log;
+import { put, iife, empty } from "/static/tokenizer.js";
+import { radixes, constants, instructions } from "/static/data.js";
 
-const radixes = {bin: 2, oct: 8, dec: 10, hex: 16};
-
-const convert = (value, notation) => parseInt(value, radixes[notation]);
+const convert = (token, notation) => parseInt(token.value, radixes[notation]);
 
 // EXCEPTION HANLDING ROUTINES...
 
@@ -34,13 +18,6 @@ const chuck = function(type, message, token) {
     message that is then thrown as a string (eliminating the stacktrace). */
 
     throw `Assembly${type}Error[${token.line}:${token.column}] ${message}`;
-};
-
-const rejectValue = function(value, token) {
-
-    /* This wraps `chuck`, handling operands that are out of range. */
-
-    chuck("Value", `the operand (${value}) is out of range`, token);
 };
 
 const rejectToken = function(token) {
@@ -55,9 +32,9 @@ const rejectToken = function(token) {
 export const assemble = function * (tokens) {
 
     /* This generator takes a token generator (from `tokenize`), and yields
-    instruction hashes, which each have their code name and addressing mode
-    (as strings), the address as a number (or `null` for implied addresses)
-    and the length in bytes. They are consumed by the `codegen` generator.
+    instruction hashes, which each have their opcode and addressing mode (as
+    strings), the address as a number (or `null` for implied addresses) and
+    the length in bytes. They are consumed by the `codegen` generator.
 
     Thhis function requests tokens as they are required, but stays ahead of
     the current token by one to allow for peeking at the next token.
@@ -70,149 +47,170 @@ export const assemble = function * (tokens) {
 
     const advance = () => [token, next] = [next, tokens.next().value];
 
-    const declarator = token => token.type === "declarator";
-
     const immediate = token => token.type === "bang";
-
-    const variable = token => token.type === "variable";
-
+    
     const indirect = token => token.type === "opener";
+    
+    const variable = token => token.type === "variable";
+    
+    const constant = token => token.type === "constant";
+    
+    const declarator = token => token.type === "declarator";
 
     const continuation = next => next !== undefined && next.type === "comma";
 
-    const implicit = code => function() {
+    const implicit = function(opcode, instruction) {
+        
+        /* This helper registers instructions with implicit operands, also
+        enclosing the instruction data. */
 
-        /* This helper takes an instruction name and returns a handler for
-        parsing implicit operands. It would obviously be redundant, but it
-        compliments the `explicit` helper. */
+        opcodes[opcode] = function() {
 
-        return {code: code, mode: "implicit", value: null, bytes: 1};
+            const {line, column} = token;
+            const [mode, value, bytes]  = ["implicit", null, 1];
+
+            return {opcode, mode, value, bytes, line, column, instruction};
+        };
     };
 
-    const explicit = function(code) {
+    const explicit = function(opcode, instruction) {
 
-        /* This function takes a code for a CPU instruction that requires an
-        operand. The function updates the nonlocal `instructions` hash with a
-        handler that can parse explicit operands. */
+        /* This function takes an opcode for a CPU instruction that requires
+        an operand. The function updates the nonlocal `opcodes` hash with a
+        handler for the opcode that can parse explicit operands. */
 
-        instructions[code] = function evaluate(notation="hex", mode="direct") {
+        opcodes[opcode] = function evaluate(notation="HEX", mode="absolute") {
 
             /* This function recursively consumes one operand (an address)
             that is expressed using one of a set of grammars. It converts the
             address to a number, finds its addressing mode, and checks that
             the result is in range for the mode, returning it if so. */
 
-            const finalize = function(value) {
-
-                /* This helper finalizes everything, checking the operand is
-                within range, before returning the instruction that is then
-                returned by the outer `evaluate` function. */
-
-                const bytes = mode === "immediate" ? 2 : 3;
-
-                if (value > 65535 || (mode === "immediate" && value > 255)) {
-
-                    rejectValue(value, token);
-
-                } else return {code, mode, value, bytes};
-            };
-
             let operand, value;
 
             advance();
+            
+            // RECUSIVLY HANDLE (DECLARATOR AND IMMEDIATE) PREFIXES...
 
             if (declarator(token)) return evaluate(token.value, mode);
-
+            
             if (immediate(token)) return evaluate(notation, "immediate");
 
+            // STORE THE LEXICAL POSITION OF THE START OF THE ADDRESS...
+
+            const { line, column } = token;
+
+            // WITH THE PREFIXES RESOLVED, HANDLE NAMED ADDRESSES HERE...
+
             if (variable(token)) value = variables[token.value];
+
+            else if (constant(token)) value = constants[token.value];
+
+            // ELSE, (RECURSIVELY) RESOLVE INDIRECT ADDRESSES HERE...
 
             else if (indirect(token)) {
 
                 operand = evaluate(notation, mode);
                 advance("closer");
 
-                if (operand.mode === "direct") mode = "indirect";
+                if (operand.mode === "absolute") mode = "indirect";
                 else mode = `${operand.mode}indirect`;
 
                 value = operand.value;
 
-            } else value = convert(token.value, notation);
+            // ELSE, RESOLVE REGULAR (NUMERIC) ADDRESSES HERE...
+
+            } else value = convert(token, notation);
+
+            // NOW THE ADDRESS IS RESOLVED, HANDLE ANY INDEXING...
 
             if (continuation(next)) {
 
                 advance("comma"); advance("index");
 
-                if (mode === "direct") mode = "indexed" + token.value;
+                if (mode === "absolute") mode = "indexed" + token.value;
                 else mode += "indexed" + token.value;
             }
 
-            return finalize(value);
+            // FINALIZE AND RETURN THE (COMPLETE) INSTRUCTION HASH...
+
+            const bytes = mode === "immediate" ? 2 : 3;
+
+            return {opcode, mode, value, bytes, line, column, instruction};
         };
     };
 
     // LOCAL CONSTANTS AND VARIABLES...
 
+    const opcodes = Object.create(null);
     const variables = Object.create(null);
-    const instructions = Object.create(null);
 
     let token, name, operator, instruction, notation;
 
     let next = tokens.next().value;
     let offset = 0;
 
-    // REGISTER THE INSTRUCTIONS, CODE NAMES AND GRAMMARS...
+    // REGISTER THE INSTRUCTIONS (OPCODES AND GRAMMARS)...
 
-    implicit("AOA");
-    explicit("TMA");
-    explicit("TAM");
-    explicit("TMX");
-    explicit("TXA");
+    for (let opcode in instructions) {
+
+        const instruction = instructions[opcode];
+
+        if ("implicit" in instruction) implicit(opcode, instruction);
+        else explicit(opcode, instruction);
+    }
 
     // RUN THE MAIN LOOP UNTIL THE TOKENS ARE EXHUSTED...
 
     while (advance() && token) {
 
-        // every iteration expects to handle one complete instruction, which
-        // will begin with a variable name or an instruction's code name...
+        /* Every iteration expects to handle one complete instruction, which
+        will begin with a variable name or an opcode. */
 
         if (token.type === "variable") {
 
-            // get the name and advance to the operator...
+            /* Variable names are followed by a suffix label operator (`:`),
+            or an infix let operator (`=`) with an address for its right
+            operand. */
+
+            // GET THE NAME, THEN ADVANCE AND HANDLE THE OPERATOR...
 
             name = token.value;
             advance("label", "let");
-
-            // variable names are followed by a suffix label operator or an
-            // infix let operator...
 
             if (token.type === "label") variables[name] = offset;
 
             else if (token.type === "let") {
 
-                // assignments have a numerical operand, optionally prefixed
-                // by a radix declarator...
+                /* Assignments do not use the `evaluate` function to parse
+                the address, as assignments always have a simple numerical
+                operand (optionally prefixed by a radix declarator), which
+                is less than what `evaluate` permits. */
 
                 advance("declarator", "number");
+
+                // CHECK FOR A DECLARATOR, THEN DETERMINE THE RADIX...
 
                 if (token.type === "declarator") {
 
                     notation = token.value;
                     advance("number");
+                    
+                } else notation = "HEX";
+                
+                // RESOLVE THE NOTATION, THEN REGISTER THE VARIABLE...
 
-                } else notation = "hex";
-
-                variables[name] = convert(token.value, notation);
+                variables[name] = convert(token, notation);
 
             } else rejectToken(token);
 
-        } else if (token.type === "code") {
+        } else if (token.type === "opcode") {
 
-            // instruction codes are optionally followed by an address that
-            // can use a range of grammars, so instruction handlers are used
-            // to gather up and classify the address...
+            /* Opcodes are optionally followed by an address that can use a
+            range of prefixes and grammars, so instruction handlers are used
+            to gather up and classify the address. */
 
-            instruction = instructions[token.value]();
+            instruction = opcodes[token.value]();
             offset += instruction.bytes;
 
             yield instruction;

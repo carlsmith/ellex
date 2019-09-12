@@ -57,17 +57,31 @@ Remaining:
 
 # REGISTERS
 
-There are five registers, which each have a unique initial:
+There are six registers, which each have a unique initial:
 
-A -> The Accumulator
-X -> The X Index Register
-Y -> The Y Index Register
+A -> The Accumulator         8 bit general purpose
+X -> The X Index Register    8 bit index register
+Y -> The Y Index Register    8 bit index register
+F -> The Flags Register      8 bit status register
+S -> The Stack Pointer       8 bit stack index pointer
+P -> The Program Counter    16 bit instruction pointer
 
 # CPU STATUS FLAGS
 
 There are eight flags, each using one bit of the Flags Register (F), and
 each having a unique initial:
 
+    NZOHCPIR
+    76543210
+
+N -> Negative       Set when results are negative (else cleared)
+Z -> Zero           Set when results are zero (else cleared)
+O -> Over           Set when results overflow (else cleared)
+H -> Half Carry     Set when bit 3 is carried (or bit 4 is borrowed) (else cleared)
+C -> Carry          Set when bit 7 is carried (or bit 8 is borrowed) (else cleared)
+P -> Parity         Set when results are equal (bit 0 is clear) (else cleared)
+I -> IRQ Interupt   Set when the current routine is an interupt (else cleared)
+R -> Result         Set or cleared by testing other bits (see BTB)
 
 # CPU MODES, SET AND DISABLE (9)
 

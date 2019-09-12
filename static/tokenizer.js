@@ -6,9 +6,9 @@ simple lexemes.
 
 import { radixes, constants, instructions } from "/static/data.js";
 
+const [dollar, pound, bang, lesser, minus] = ["$", "#", "!", "<", "-"];
 const [opener, closer, colon, equals] = ["[", "]", ":", "="];
-const [comma, space, newline] = ["," ," ", "\n"];
-const [dollar, pound, bang] = ["$", "#", "!"];
+const [comma, bar, space, newline] = ["," , "|", " ", "\n"];
 
 const decimals = "0123456789";
 const hexidecimals = decimals + "ABCDEF";
@@ -119,9 +119,21 @@ export const tokenize = function * (source) {
 
         else if (character === equals) [type, value] = ["let", character];
 
+        else if (character === bar) [type, value] = ["cat", character];
+
         // CHECK FOR CONDITIONS THAT YIELD A MULTI-CHARACTER TOKEN...
 
-        else if (lowers.includes(character)) {
+        else if (character === lesser) {
+
+            if (nextCharacter() === minus) {
+
+                [value, type] = ["<-", "preload"];
+
+                advance();
+
+            } else chuck(`unexpected character (${character})`);
+
+        } else if (lowers.includes(character)) {
 
             type = "variable";
 

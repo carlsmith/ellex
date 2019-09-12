@@ -13,9 +13,12 @@ import { assemble } from "/static/assembler.js";
 import { finalize } from "/static/finalizer.js";
 
 const source = `
-AOA
-snakeHead = F5
+snakeHead = FF
 snakeEyes = HEX FF
+
+snakeHead <- 50
+OCT 10 <- 00FF | 1FF | DEC 30
+
 spam:
                             ################################
     TMA BIN [00000100, Y]   # binary notation example      #

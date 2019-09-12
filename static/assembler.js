@@ -39,13 +39,21 @@ export const assemble = function * (tokens) {
     Thhis function requests tokens as they are required, but stays ahead of
     the current token by one to allow for peeking at the next token.
 
-    The `advance` helper moves everything forwards one token.
+    The `advance` helper moves everything forwards one token, checking the
+    new token belongs to one of the given types.
 
     The other helpers (`declarator`, `immediate`, `variable` `indirect` and
     `continuation`) all just check some predicate (making the if-else block
     in the `evaluate` function more readable). */
 
-    const advance = () => [token, next] = [next, tokens.next().value];
+    const advance = function(...types) {
+        
+        [token, next] = [next, tokens.next().value];
+
+        if (token === undefined) return false;
+        if (types.includes(token.type)) return token;
+        else rejectToken(token);
+    };
 
     const immediate = token => token.type === "bang";
     
@@ -59,7 +67,7 @@ export const assemble = function * (tokens) {
 
     const continuation = next => next !== undefined && next.type === "comma";
 
-    const implicit = function(opcode, instruction) {
+    const registerImplicit = function(opcode, instruction) {
         
         /* This helper registers instructions with implicit operands, also
         enclosing the instruction data. */
@@ -73,7 +81,7 @@ export const assemble = function * (tokens) {
         };
     };
 
-    const explicit = function(opcode, instruction) {
+    const registerExplicit = function(opcode, instruction) {
 
         /* This function takes an opcode for a CPU instruction that requires
         an operand. The function updates the nonlocal `opcodes` hash with a
@@ -88,8 +96,8 @@ export const assemble = function * (tokens) {
 
             let operand, value;
 
-            advance();
-            
+            advance("declarator", "number", "variable", "opener", "bang", "constant");
+
             // RECUSIVLY HANDLE (DECLARATOR AND IMMEDIATE) PREFIXES...
 
             if (declarator(token)) return evaluate(token.value, mode);
@@ -140,13 +148,65 @@ export const assemble = function * (tokens) {
         };
     };
 
+    const gatherPreloadData = function() {
+
+        /* This helper wraps `gatherSimpleOperands` in a loop to gather up
+        arrays of one or more (bar-seperated) operands. In practice, the
+        types are always the same in this context, so are hardcoded. */
+
+        const gatherNextByte = function() {
+            
+            advance("declarator", "number", "string");
+            let value = gatherSimpleOperand();
+
+            return {value: value, line: token.line, column: token.column}
+        };
+
+        const output = [gatherNextByte()];
+
+        while (next.type === "cat") {
+
+            advance("cat");
+            output.push(gatherNextByte())
+        }
+
+        return output;
+    };
+
+    const gatherSimpleOperand = function() {
+
+        /* This helper establishes the notation type, then parses and returns
+        the value of a simple operand.  */
+
+        let notation = "HEX";
+
+        if (token.type === "declarator") {
+
+            notation = token.value;
+            advance("number");
+        }
+
+        if (token.type === "variable") return variables[token.value];
+        else return convert(token, notation);
+
+        return rvalue;
+    };
+
+    const assemblePreload = function(start, token, bytes) {
+
+        const { line, column } = token;
+        const size = bytes.length;
+
+        return {opcode: "PRELOAD", line, column, start, size, bytes};
+    };
+
     // LOCAL CONSTANTS AND VARIABLES...
 
     const opcodes = Object.create(null);
+    const preloads = Object.create(null);
     const variables = Object.create(null);
 
-    let token, name, operator, instruction, notation;
-
+    let lead, token, types, lvalue, rvalue, operator, instruction, notation;
     let next = tokens.next().value;
     let offset = 0;
 
@@ -156,53 +216,55 @@ export const assemble = function * (tokens) {
 
         const instruction = instructions[opcode];
 
-        if ("implicit" in instruction) implicit(opcode, instruction);
-        else explicit(opcode, instruction);
+        if ("implicit" in instruction) registerImplicit(opcode, instruction);
+        else registerExplicit(opcode, instruction);
     }
 
     // RUN THE MAIN LOOP UNTIL THE TOKENS ARE EXHUSTED...
 
-    while (advance() && token) {
+    while (advance("variable", "opcode", "number", "declarator")) {
 
         /* Every iteration expects to handle one complete instruction, which
-        will begin with a variable name or an opcode. */
+        will begin with a variable name (assignments), opcode (instructions)
+        or an address number (preloads). */
+
+        lvalue = token.value;
 
         if (token.type === "variable") {
 
             /* Variable names are followed by a suffix label operator (`:`),
-            or an infix let operator (`=`) with an address for its right
-            operand. */
+            an infix let operator (`=`) with an address for its rvalue, or an
+            infix preload operator (`<-`) with a range of valid rvalues. */
 
-            // GET THE NAME, THEN ADVANCE AND HANDLE THE OPERATOR...
+            advance("label", "let", "preload");
 
-            name = token.value;
-            advance("label", "let");
-
-            if (token.type === "label") variables[name] = offset;
+            if (token.type === "label") variables[lvalue] = offset;
 
             else if (token.type === "let") {
 
-                /* Assignments do not use the `evaluate` function to parse
-                the address, as assignments always have a simple numerical
-                operand (optionally prefixed by a radix declarator), which
-                is less than what `evaluate` permits. */
-
                 advance("declarator", "number");
+                variables[lvalue] = gatherSimpleOperand();
 
-                // CHECK FOR A DECLARATOR, THEN DETERMINE THE RADIX...
+            } else if (token.type === "preload") {
 
-                if (token.type === "declarator") {
+                lead = token;
+                lvalue = variables[lvalue];
 
-                    notation = token.value;
-                    advance("number");
-                    
-                } else notation = "HEX";
-                
-                // RESOLVE THE NOTATION, THEN REGISTER THE VARIABLE...
-
-                variables[name] = convert(token, notation);
+                yield assemblePreload(lvalue, lead, gatherPreloadData());
 
             } else rejectToken(token);
+
+        } else if (token.type === "number" || token.type === "declarator") {
+
+            /* Statements that begin with numbers are always preloads. The
+            number is followed by the preload operator, then one or more
+            rvalues. */
+
+            lead = token;
+            lvalue = gatherSimpleOperand();
+            advance("preload");
+
+            yield assemblePreload(lvalue, lead, gatherPreloadData());
 
         } else if (token.type === "opcode") {
 
